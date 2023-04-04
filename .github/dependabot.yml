@@ -16,12 +16,3 @@ updates:
       - dependency-type: direct
     registries:
       - testpypi
-
-  - directory: /docs/.sphinx
-    package-ecosystem: pip
-    schedule:
-      interval: weekly
-    allow:
-      - dependency-type: all
-    registries:
-      - testpypi
