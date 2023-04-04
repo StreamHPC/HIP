@@ -16,3 +16,5 @@ updates:
       - dependency-type: direct
     registries:
       - testpypi
+    # REMOVE before merging required because using testpypi
+    insecure-external-code-execution: allow
