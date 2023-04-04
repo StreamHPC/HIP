@@ -1,6 +1,6 @@
 version: 2
 
-# Test pypi to be removed before merging
+# Test pypi to be removed before merging,
 registries:
   testpypi:
     type: python-index
