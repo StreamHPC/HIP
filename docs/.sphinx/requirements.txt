@@ -34,11 +34,11 @@ markdown-it-py==2.1.0
     #   myst-parser
 markupsafe==2.1.1
     # via jinja2
-mdit-py-plugins==0.3.1
+mdit-py-plugins==0.3.5
     # via myst-parser
 mdurl==0.1.2
     # via markdown-it-py
-myst-parser[linkify]==0.18.1
+myst-parser[linkify]==1.0.0
     # via -r requirements.in
 packaging==21.3
     # via sphinx
@@ -54,7 +54,7 @@ requests==2.28.1
     # via sphinx
 snowballstemmer==2.2.0
     # via sphinx
-sphinx==4.3.1
+sphinx==5.3.0
     # via myst-parser
 sphinxcontrib-applehelp==1.0.2
     # via sphinx
@@ -68,12 +68,7 @@ sphinxcontrib-qthelp==1.0.3
     # via sphinx
 sphinxcontrib-serializinghtml==1.1.5
     # via sphinx
-typing-extensions==4.4.0
-    # via myst-parser
 uc-micro-py==1.0.1
     # via linkify-it-py
 urllib3==1.26.11
     # via requests
-
-# The following packages are considered to be unsafe in a requirements file:
-# setuptools
