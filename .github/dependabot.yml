@@ -1,0 +1,27 @@
+version: 2
+
+# Test pypi to be removed before merging
+registries:
+  testpypi:
+    type: python-index
+    url: https://test.pypi.org/simple/
+
+updates:
+  # Separate schedule for 
+  - directory: /docs/.sphinx
+    package-ecosystem: pip
+    schedule:
+      interval: daily
+    allow:
+      - dependency-type: direct
+    registries:
+      - testpypi
+
+  - directory: /docs/.sphinx
+    package-ecosystem: pip
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-type: all
+    registries:
+      - testpypi
