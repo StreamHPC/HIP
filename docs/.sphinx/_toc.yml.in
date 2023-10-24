@@ -14,6 +14,7 @@ subtrees:
 - caption: User Tutorials
   entries:
     - file: tutorials/saxpy.md
+    - file: tutorials/reduction.md
 - caption: Developer How to Guides
   entries:
     - file: developer_guide/build
