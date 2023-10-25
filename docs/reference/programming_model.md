@@ -23,12 +23,12 @@ which threads execute.
 The thread hiearchy inherent to how AMD GPUs operate manifest as depicted in
 {numref}`inherent_thread_hierarchy`.
 
-:::{figure-md} inherent_thread_hierarchy
+```{figure-md} inherent_thread_hierarchy
 
 <img src="../data/reference/programming_model/thread_hierarchy.svg" alt="Hierarchy of thread groups.">
 
 Hierarchy of thread groups.
-:::
+```
 
 - The innermost grouping is called a warp, or a wavefront in ISA terms. A warp
   is the most tightly coupled groups of threads, both physically and logically.
@@ -73,12 +73,12 @@ groups manifest based on kernel launch parameters.
 The thread hiearchy abstraction of Cooperative Groups manifest as depicted in
 {numref}`coop_thread_hierarchy`.
 
-:::{figure-md} coop_thread_hierarchy
+```{figure-md} coop_thread_hierarchy
 
 <img src="../data/reference/programming_model/thread_hierarchy_coop.svg" alt="Cooperative group thread hierarchy.">
 
 Cooperative group thread hierarchy.
-:::
+```
 
 - Multi Grid is an abstraction of potentially multiple simultaneous launches of
   the same kernel over multiple devices. Grids inside a multi device kernel
@@ -114,12 +114,12 @@ The hierarchy of threads introduced by {ref}`inherent_tread_model` is induced
 by the memory subsystem of GPUs. {numref}`memory_hierarchy` summarizes that memory namespaces and
 how they relate to the various levels of the threading model.
 
-:::{figure-md} memory_hierarchy
+```{figure-md} memory_hierarchy
 
 <img src="../data/reference/programming_model/memory_hierarchy.svg" alt="Memory hierarchy.">
 
 Memory hierarchy.
-:::
+```
 
 - Local or per-thread memory is read-write storage only visible to the
   threads defining the given variables. The size of a block for a given kernel,

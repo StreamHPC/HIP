@@ -135,8 +135,10 @@ the angle brackets we can provide the following:
 - The amount of shared memory to allocate by the host
 - The device stream to enqueue the operation on
 
-Following the triple chevron is ordinary function argument passing. Now let's
-take a look how the kernel is implemented.
+The block size and shared memory will become important later in
+{doc}`reduction`, for the time being a hardcoded `256` is a safe default for
+simple kernels, such as this. Following the triple chevron is ordinary function
+argument passing. Now let's take a look how the kernel is implemented.
 
 ```cu
 __global__ void saxpy_kernel(const float a, const float* d_x, float* d_y, const unsigned int size)
