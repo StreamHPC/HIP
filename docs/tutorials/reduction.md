@@ -76,9 +76,9 @@ may be destroyed.
 std::size_t factor = block_size; // block_size from hipGetDeviceProperties()
 auto new_size = [factor](const std::size_t actual)
 {
- // Every pass reduces input length by 'factor'. If actual size is not divisible by factor,
- // an extra output element is produced using some number of zero_elem inputs.
- return actual / factor + (actual % factor == 0 ? 0 : 1);
+	// Every pass reduces input length by 'factor'. If actual size is not divisible by factor,
+	// an extra output element is produced using some number of zero_elem inputs.
+	return actual / factor + (actual % factor == 0 ? 0 : 1);
 };
 ```
 
@@ -106,21 +106,21 @@ iteration so the result is in the back-buffer no matter the input size.
 ```c++
 for(uint32_t curr = input_count; curr > 1;)
 {
- hipLaunchKernelGGL(
-  kernel,
-  dim3(new_size(curr)),
-  dim3(block_size),
-  factor * sizeof(unsigned),
-  hipStreamDefault,
-  front,
-  back,
-  kernel_op,
-  zero_elem,
-  curr);
+	hipLaunchKernelGGL(
+		kernel,
+		dim3(new_size(curr)),
+		dim3(block_size),
+		factor * sizeof(unsigned),
+		hipStreamDefault,
+		front,
+		back,
+		kernel_op,
+		zero_elem,
+		curr);
 
- curr = new_size(curr);
- if(curr > 1)
-  std::swap(front, back);
+	curr = new_size(curr);
+	if(curr > 1)
+		std::swap(front, back);
 }
 ```
 
@@ -131,39 +131,39 @@ the kernel itself:
 ```c++
 template<typename T, typename F>
 __global__ void kernel(
- T* front,
- T* back,
- F op,
- T zero_elem,
- uint32_t front_size)
+	T* front,
+	T* back,
+	F op,
+	T zero_elem,
+	uint32_t front_size)
 {
- extern __shared__ T shared[];
+	extern __shared__ T shared[];
 
- // Overindex-safe read of input
- auto read_global_safe = [&](const uint32_t i)
- {
-  return i < front_size ? front[i] : zero_elem;
- };
+	// Overindex-safe read of input
+	auto read_global_safe = [&](const uint32_t i)
+	{
+		return i < front_size ? front[i] : zero_elem;
+	};
 
- const uint32_t tid = threadIdx.x,
-                bid = blockIdx.x,
-                gid = bid * blockDim.x + tid;
+	const uint32_t tid = threadIdx.x,
+	               bid = blockIdx.x,
+	               gid = bid * blockDim.x + tid;
 
- // Read input from front buffer to shared
- shared[tid] = read_global_safe(gid);
- __syncthreads();
+	// Read input from front buffer to shared
+	shared[tid] = read_global_safe(gid);
+	__syncthreads();
 
- // Shared reduction
- for(uint32_t i = 1; i < blockDim.x; i *= 2)
- {
-  if(tid % (2 * i) == 0)
-   shared[tid] = op(shared[tid], shared[tid + i]);
-  __syncthreads();
- }
+	// Shared reduction
+	for(uint32_t i = 1; i < blockDim.x; i *= 2)
+	{
+		if(tid % (2 * i) == 0)
+			shared[tid] = op(shared[tid], shared[tid + i]);
+		__syncthreads();
+	}
 
- // Write result from shared to back buffer
- if(tid == 0)
-  back[bid] = shared[0];
+	// Write result from shared to back buffer
+	if(tid == 0)
+		back[bid] = shared[0];
 }
 ```
 
@@ -179,3 +179,5 @@ the reduction, warps remain active for longer than necessary.
 
 One may reduce divergence by keeping dataflow between memory addresses
 identical but reassigning the thread ids.
+
+REDUCED THREAD DIVERGENCE IMAGE
