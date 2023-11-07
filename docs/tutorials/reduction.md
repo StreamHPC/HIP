@@ -209,8 +209,10 @@ introduces a new issue: bank conflicts.
 
 Shared memory on both AMD and NVIDIA is implemented in hardware by storage
 which is organized into banks of various sizes. On AMD hardware the name of
-this hardware element is LDS, Local Data Share. A truthful mental model of
-shared memory is to think of it as a striped 2-dimensional range of memory.
+this hardware element is LDS, Local Data Share. On NVIDIA hardware it's
+implemented using the same silicon as the L1 data cache. A truthful mental
+model of shared memory is to think of it as a striped 2-dimensional range of
+memory.
 
 SHARED MEMORY BANKS IMAGE
 
@@ -294,6 +296,18 @@ warp participating meaningfully, we can cut short the loop and let the rest of
 the warps terminate, moreover without the need for syncing the entire block, we
 can also unroll the loop.
 
+The `tmp` namespace used beyond this point in the chapter holds a handful of
+template meta-programmed utilities to facilitate writing flexible _and_ optimal
+code.
+
+- `tmp::static_for` is a for loop where the running index is a compile-time
+  constant and is eligible for use in compile-time evaluated contexts, not just
+  constant folding within the compiler.
+- `tmp::static_range_for` is the range-based for loop equivalent.
+- `tmp::static_range_switch` takes run-time value and run-time dispatches to a
+  range set of tabulated functions where said value is a compile-time constant
+  and is eligible for use in compile-time evaluated contexts.
+
 ```diff
 -template<typename T, typename F>
 +template<uint32_t WarpSize, typename T, typename F>
@@ -311,11 +325,47 @@ __global__ void kernel(
 	__syncthreads();
 }
 +// Warp reduction
-+	tmp::static_for<WarpSize, tmp::not_equal<0>, tmp::divide<2>>([&]<int I>()
++tmp::static_for<WarpSize, tmp::not_equal<0>, tmp::divide<2>>([&]<int I>()
++{
++	if (tid < I)
++		shared[tid] = op(shared[tid], shared[tid + I]);
++});
+```
+
+Because HIP typically targets hardware with warp sizes of 32 (NVIDIA GPUs and
+RDNA AMD GPUs) as well as of 64 (CNDA AMD GPUs), portable HIP code must handle
+both. That is why instead of assuming a warp size of 32 we make that a template
+argument of the kernel, allowing us to unroll the final loop using
+`tmp::static_for` in a parametric way but still having the code read much like
+an ordinary loop, perhaps with the sole major difference of naming the loop
+"variable" last via the template lambda.
+
+Promoting the warp/wavefront size size to being a compile-time constant means
+we have to do the same promotion on the host-side as well. We'll sandwich our
+kernel launch with `tmp::static_range_switch`, promoting the snake-case
+run-time `warp_size` variable to a camel-case compile-time constant `WarpSize`.
+
+```diff
+// Device-side reduction
+for (uint32_t curr = input_count; curr > 1;)
+{
++	tmp::static_range_switch<std::array{32, 64}>(warp_size, [&]<int WarpSize>() noexcept
 +	{
-+		if (tid < I)
-+			shared[tid] = op(shared[tid], shared[tid + I]);
+		hipLaunchKernelGGL(
+-			kernel,
++			kernel<WarpSize>,
+			dim3(new_size(curr)),
+			dim3(block_size),
+			factor * sizeof(unsigned),
+			hipStreamDefault,
+			front,
+			back,
+			kernel_op,
+			zero_elem,
+			curr);
 +	});
+		...
+}
 ```
 
 ```{note}
@@ -332,3 +382,417 @@ active threads together into the same warp. It's a hardware feature assisting
 highly and unpredictably divergent workflow, such as ray-tracing but is
 unnecessary gymnastics in well defined algorithms.
 ```
+
+### 6. Unroll all loops
+
+While the previous step primarily aimed for removing the unnecessary syncing
+only, it also went ahead and unrolled the end of the loop. We could however
+force unrolling the first part of the loop as well. This saves a few scalar
+registers (values the compiler can prove to be uniform across
+warps/wavefronts).
+
+```diff
+-template<uint32_t WarpSize, typename T, typename F>
+-__global__ void kernel(
++template<uint32_t BlockSize, uint32_t WarpSize, typename T, typename F>
++__global__ __launch_bounds__(BlockSize) void kernel(
+	T* front,
+	T* back,
+	F op,
+	T zero_elem,
+	uint32_t front_size)
+{
+-	extern __shared__ T shared[];
++	__shared__ T shared[BlockSize];
+
+	...
+
+	// Shared reduction
+-	for (uint32_t i = blockDim.x / 2; i > WarpSize; i /= 2)
++	tmp::static_for<BlockSize / 2, tmp::greater_than<WarpSize>, tmp::divide<2>>([&]<int I>()
+	{
+-		if (tid < i)
+-			shared[tid] = op(shared[tid], shared[tid + i]);
++		if (tid < I)
++			shared[tid] = op(shared[tid], shared[tid + I]);
+		__syncthreads();
+	}
++	);
+```
+
+There are two notable changes beyond introducing yet another template argument
+for the kernel and the moving from `for` to `tmp::static_for`:
+
+- We've added a new attribute to our kernel: `__launch_bounds__(BlockSize)`.
+  This attribute instructs the compiler that the kernel will only be launched
+  using the designated block size. (Launches of differing block sizes will
+  fail.) This allows the optimizer to enroll the `blockDim.x` variable in
+  constant folding as well better reason about register pressure/usage.
+- Turning the block size into a compile-time constant allows us to statically
+  allocate shared memory.
+
+### 7. Communicate using warp-collective functions
+
+Shared memory provides us with a fast communication path within a block, but
+when performing reduction within the last warp/wavefront, we have an even
+faster communication means at our disposal: warp-collective or cross-lane
+functions. Instead of using the hardware backing shared memory we can directly
+copy between the local memory (the registers) of each lane in a warp/wavefront.
+The family of functions that allow us to do this are the shuffle functions.
+
+We'll be using `__shfl_down()`, one of the most restrictive but also most
+structured communication schemes.
+
+```diff
+// Warp reduction
+-tmp::static_for<WarpSize, tmp::not_equal<0>, tmp::divide<2>>([&]<int I>()
+-{
+-	if (tid < I)
+-		shared[tid] = op(shared[tid], shared[tid + I]);
+-});
+-
+-// Write result from shared to back buffer
+-if (tid == 0)
+-	back[bid] = shared[0];
++if (tid < WarpSize)
++{
++	T res = op(shared[tid], shared[tid + WarpSize]);
++	tmp::static_for<WarpSize / 2, tmp::not_equal<0>, tmp::divide<2>>([&]<int Delta>()
++	{
++		res = op(res, __shfl_down(res, Delta));
++	});
++
++	// Write result from shared to back buffer
++	if (tid == 0)
++		back[bid] = res;
++}
+```
+
+Moving to using warp-collective functions for communication means that control
+flow has to be uniform across warps, much like the name warp-collective
+implies. Therefore we externelized the thread id check outside the loop. (Write
+out of the result moved inside due to variable scoping.)
+
+### 8. Prefer warp communication over shared
+
+Like we've mentioned in the previous step, communication between local memory
+is faster than shared. Instead of relying on it solely at the end of the
+tree-like reduction, it is possible to turn the tree reduction "inside out" and
+perform multiple parallel warp reductions in parallel starting with all threads
+are active, and communicate only their partial results through shared.
+
+IMAGE OF FINAL ALGO
+
+This version of the kernel differs significantly enough to not describe through
+a diff but afresh.
+
+```c++
+template<uint32_t BlockSize, uint32_t WarpSize, typename T, typename F>
+__global__ __launch_bounds__(BlockSize) void kernel(
+	T* front,
+	T* back,
+	F op,
+	T zero_elem,
+	uint32_t front_size)
+{
+	...
+}
+```
+
+The kernel signature looks the same, the factor of reduction is the same as in
+previous cases, only the implementation differs.
+
+```c++
+static constexpr uint32_t WarpCount = BlockSize / WarpSize;
+
+__shared__ T shared[WarpCount];
+
+auto read_global_safe =
+	[&](const uint32_t i) { return i < front_size ? front[i] : zero_elem; };
+auto read_shared_safe =
+	[&](const uint32_t i) { return i < WarpCount ? shared[i] : zero_elem; };
+
+const uint32_t tid = threadIdx.x,
+               bid = blockIdx.x,
+               gid = bid * (blockDim.x * 2) + tid,
+               wid = tid / WarpSize,
+               lid = tid % WarpSize;
+
+// Read input from front buffer to local
+T res = op(read_global_safe(gid), read_global_safe(gid + blockDim.x));
+```
+
+Because we communicate the results of warps through shared, we'll need as many
+elements in shared as warps within out block. Much like we could only launch
+kernels at block granularity to begin with, we can only warp reduce with
+`WarpSize` granularity (due to the collective nature of the cross-lane
+built-ins), hence we introduce `read_shared_safe` to pad overindexing by
+reading `zero_elem`ents. Reading from global remains unchanged.
+
+```c++
+// Perform warp reductions and communicate results via shared
+tmp::static_for<
+	WarpCount,
+	tmp::not_equal<0>,
+	tmp::select<
+		tmp::not_equal<1>,
+		tmp::divide_ceil<WarpSize>,
+		tmp::constant<0>>>([&]<uint32_t ActiveWarps>()
+{
+	if(wid < ActiveWarps)
+	{
+		// Warp reduction
+		tmp::static_for<WarpSize / 2, tmp::not_equal<0>, tmp::divide<2>>([&]<int Delta>()
+		{
+			res = op(res, __shfl_down(res, Delta)); });
+
+			// Write warp result from local to shared
+			if(lid == 0)
+				shared[wid] = res;
+	}
+	__syncthreads();
+
+	// Read warp result from shared to local
+	res = read_shared_safe(tid);
+});
+
+// Write result from local to back buffer
+if(tid == 0)
+    back[bid] = res;
+```
+
+`ActiveWarps` goes from `WarpCount` until it reaches `0`, every iteration the
+number of active warps reduces `WarpSize`. To deal with cases when the partial
+result count isn't a divisor of `ActiveWarps` and we need to launch an extra
+warp, we're using `tmp::divide_ceil` which always rounds to positive infinity.
+We need the tertiary `tmp::select`, because such division never reaches `0`, so
+we must terminate the loop after once the last warp concluded.
+
+In each iteration if the warp is active (has at least a single valid input) it
+carries out a pass of warp reduction and writes output based on warp id.
+Reading is based thread id. Global output is still based on block id.
+
+### 9. Amortize bookkeeping variable overhead
+
+We have touched upon reducing register usage as a means of improving occupancy,
+meaning allowing more blocks to execute in parallel on all Multi Processors
+allowing more global store/load latency to be hidden. By reducing the number of
+kernels in flight but still carrying out the same workload, we allow wasting
+less registers on loading and maintaining bookkeeping variables such as kernel
+indices.
+
+One optimization we already did somewhat unknowingly in this direction was when
+we performed one binary `op` while loading input from global. Do not let the
+syntax fool you, there's no such thing as carrying out said operation "in
+flight", the two values are loaded into local memory (registers) then `op` gets
+called.
+
+A more general form of this optimization is wrapping most of the kernel logic
+with loops which all carry out the workload of multiple kernel instances but
+require storing only a single instance of most of the bookkeeping logic. In
+code we will refer to this multiplicity factor via the `ItemsPerThread`
+compile-time constant, supplied by a template argument to allow for loop
+unrolling.
+
+This kernel variant will utilize another utility which is generally applicable:
+`hip::static_array` is a more restrictive wrapper over the built-in array than
+`std::array`, as it only allows indexing only via compile-time constants using
+the usual tuple-like `template <size_t I> auto get<I>(...)` interface.
+
+```{tip}
+This is important, because on a GPU there is no stack, but local memory is
+provisioned from the register file and this provisioning happens statically. To
+paraphrase, the address range of a thread's local memory is determined at
+compile time. When an array is defined and used in local storage, the compiler
+can only maintain its storage in the register file as long as all access to the
+array is computable by the compiler at compile-time. It need not strictly be a
+compile-time constant, if through constant folding or some other means the
+compiler can resolve the addresses of the accesses. However, if it cannot, the
+array will be backed by global memory (indicated by allocating a non-zero
+number of spill registers observable using static analysis tools) which is
+multiple orders of magnitude slower. `hip::static_array` via its `hip::get<>`
+interface guarantees that no such spills will occur.
+```
+
+```c++
+template<uint32_t BlockSize, uint32_t WarpSize, uint32_t ItemsPerThread>
+__global__ static __launch_bounds__(BlockSize) void kernel(...)
+```
+
+Our kernel as promised now has three compile-time configurable parameters. The
+only part of the kernel that changes is how we load data from global and how we
+perform the binary operation on those loaded values. What used to be the
+one-liner:
+
+```c++
+// Read input from front buffer to local
+T res = op(read_global_safe(gid), read_global_safe(gid + blockDim.x));
+```
+
+is going to be split now to a reading and a processing step.
+
+### Reading `ItemsPerThread`
+
+The change to reading is going to happen inside `read_global_safe`:
+
+```c++
+auto read_global_safe = [&](const int32_t i)
+{
+	return [&]<int32_t... I>(std::integer_sequence<int32_t, I...>)
+	{
+		if(i + ItemsPerThread < front_size)
+			return hip::static_array<T, ItemsPerThread>{
+				front[i + I]...
+			};
+		else
+			return hip::static_array<T, ItemsPerThread>{
+				(i + I < front_size ? front[i + I] : zero_elem)...
+			};
+	}(std::make_integer_sequence<int32_t, ItemsPerThread>());
+};
+```
+
+What's happening here? Without the flexibility of a configurable
+`ItemsPerThread` property, we'd want to load each array element one after the
+other, morally equivalent to:
+
+```c++
+T arr[4] = {
+	front[gid + 0],
+	front[gid + 1],
+	front[gid + 2],
+	front[gid + 3]
+}
+```
+
+This is exactly what's happening in the `front[i + I]...` fold-expression.
+There is a condition though: we only issue this if the entire read is operating
+on real input and it's not padding using `zero_elem`. If some reads would
+overindex the input, the read turns into:
+
+```c++
+T arr[4] = {
+	gid + I < front_size ? front[i + 0] : zero_elem,
+	gid + I < front_size ? front[i + 1] : zero_elem,
+	gid + I < front_size ? front[i + 2] : zero_elem,
+	gid + I < front_size ? front[i + 3] : zero_elem
+}
+```
+
+Why do we do this? Because we want to make it easier for the compiler to
+recognize vector loads from global. Because our performance at large is
+dominated by how we move our data, as we've seen by the huge performance
+improvement when we moved to loading two values per thread, it's only natural
+we wish to utilize dedicated instructions to moving more data with less binary.
+See [here](https://godbolt.org/z/b36Eea69q) how loading for AMD (both RDNA and
+CDNA) compiles to `global_load_dwordx4` where `x4` denotes the 4-vector variant
+of the instruction.
+
+```{tip}
+Eagle eyed readers may have noticed that `read_global_safe` used to take an
+`uint32_t` as the index type and now it takes a signed integer. When indexing
+an array with unsigned integrals, the compiler has to handle integer overflows
+as they're defined by the C/C++ standards. It may happen, that some part of the
+vector load indices overflow, thus not resulting in a contiguous read. If you
+change the previously linked code to use an unsigned integral as the thread id,
+the compiler won't emit a vector load. Signed integer overflow is undefined
+behavior, and the optimizer assumes that a program has none in it. To convey
+the absence of overflow to the compiler with unsigned indices, add
+`__builtin_assume(gid + 4 > gid)`, or the more portable
+`[[assume]](gid + 4 > gid)` once `amdclang++` supports it.
+```
+
+To conclude `read_global_safe`'s implementation, it's an IILE (Immediately
+Invoked Lambda Expression), becasue `ItemsPerThread` is an integral value, but
+we need a compile-time `iota`-like sequence of integers _as a pack_ for our
+fold-expression to expand on, that change can only occur as part of template
+argument deduction, here on the immediately invoked template lambda.
+
+### Processing `ItemsPerThread`
+
+Once the kernel reads `ItemsPerThread` number of inputs to local, it will
+immediately reduce them to a scalar. There is no reason to propagate the input
+element multiplicity to the warp reduction phase; cross-lane shuffles are
+cheap, no shuffling is even cheaper.
+
+```c++
+T res = [&]()
+{
+	// Read input from front buffer to local
+	hip::static_array<T, ItemsPerThread> arr = read_global_safe(gid);
+
+	// Reduce ItemsPerThread to scalar
+	tmp::static_for<1, tmp::less_than<ItemsPerThread>, tmp::increment<1>>([&]<int I>()
+	{
+		get<0>(arr) = op(get<0>(arr), get<I>(arr));
+	});
+
+	return get<0>(arr);
+}();
+```
+
+## Outlook
+
+There are multiple ways one could take optimization further.
+
+### 10. Two-pass reduction
+
+Alter kernel launch and input fetching such that no more blocks are launched
+than what a subsequent kernel launch's single block can conveniently reduce,
+while performing multiple passes of input reading from global (and combine
+their) results before engaging in the end-game tree-like reduction.
+
+With this method, one can save 1-2 kernel launches for really large inputs.
+
+### 11. Global Data Share
+
+```{attention}
+This modification can only be executed on AMD hardware.
+```
+
+Perform the first step of the two-pass reduction, but at the end, instead of
+writing to global and reading it back in a subsequent kernel, write the partial
+results to the Global Data Share (aka. GDS). This is an `N+1`th shared memory
+which all Multi Processors can access and is also on-chip memory.
+
+```{tip}
+The order in which blocks are scheduled isn't guaranteed by the API, even
+though all GPUs in existence schedule them the same way, monotonically
+increasing in their block id. Relying on this implicitly, the last block of a
+grid is in the optimal position to observe the side-effects of all other blocks
+(using spinlocks, or anything else) without occupying a Multi Processor for
+longer than necessary.
+```
+
+Without launching a second kernel, have the last block collect the results of
+all other blocks from GDS (either implicitly exploiting the sceduling behavior
+or relying on Global Wave Sync, yet another AMD-specific feature) to merge them
+for a final tree-like reduction.
+
+```{important}
+Both GDS and GWS aren't covered by the HIP API but reserved features of the
+runtime. Invoking these functionalities currently requires inline AMDGCN
+assemby. Furthermore because the GDS isn't virtualized by the runtime, imposing
+further restrictions on concurrent scheduling of other kernels.
+```
+
+## Conclusion
+
+Optimizing code on GPUs, like on any other architecture requires careful
+consideration and balancing of resources and costs of various operations to
+obtain optimal performance. This tutorial explored optimizing reductions well
+beyond the territory of diminishing returns. This was deliberate to supply an
+excuse to introduce multiple optimization techniques and opportunities as well
+as necessary when accounting for the larger picture.
+
+Here we focused on reductions when an entire device participates in it, but the
+choice of optimal compile-time constants or even the algorithm itself may not
+be optimal in cases when it's multiple blocks participating in multiple
+parallel reductions or even each thread doing a reduction of their own. Going
+in the opposite direction, when multiple devices participate in the same
+reduction a whole new set of aspects must be considered.
+
+Most of these cases, including the one we just covered in this article, is
+given to end-users in a turn-key fashion via algorithm primitive libraries.
+They may not be the fastest in all of the cases, but are as close to being gold
+standards of carrying out certain operations as reasonably possible.
