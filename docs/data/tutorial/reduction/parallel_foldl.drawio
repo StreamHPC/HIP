@@ -5,7 +5,7 @@
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
                 <mxCell id="2" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#5E5B61;fontColor=#FFFFFF;strokeColor=none;spacing=0;" parent="1" vertex="1">
-                    <mxGeometry width="490" height="420" as="geometry"/>
+                    <mxGeometry width="490" height="550" as="geometry"/>
                 </mxCell>
                 <mxCell id="3" value="Parallel Fold-left" style="text;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=klavika;fontSize=17;fontColor=#FFFFFF;" parent="1" vertex="1">
                     <mxGeometry x="205" width="60" height="30" as="geometry"/>
@@ -95,16 +95,16 @@
                     <mxGeometry x="205" y="290" width="60" height="30" as="geometry"/>
                 </mxCell>
                 <mxCell id="310" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#C23555;fontColor=#FFFFFF;strokeColor=none;" parent="1" vertex="1">
-                    <mxGeometry x="360" y="290" width="120" height="120" as="geometry"/>
+                    <mxGeometry x="175" y="420" width="120" height="120" as="geometry"/>
                 </mxCell>
                 <mxCell id="311" value="&lt;font face=&quot;Klavika&quot; style=&quot;font-size: 17px;&quot;&gt;Result&lt;/font&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=17;fontColor=#FFFFFF;" parent="1" vertex="1">
-                    <mxGeometry x="390" y="290" width="60" height="30" as="geometry"/>
+                    <mxGeometry x="205" y="420" width="60" height="30" as="geometry"/>
                 </mxCell>
                 <mxCell id="312" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#262626;fontColor=#FFFFFF;strokeColor=none;" parent="1" vertex="1">
-                    <mxGeometry x="375" y="320" width="90" height="80" as="geometry"/>
+                    <mxGeometry x="190" y="450" width="90" height="80" as="geometry"/>
                 </mxCell>
                 <mxCell id="313" value="x" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Klavika;fontSize=17;fontColor=#FFFFFF;" parent="1" vertex="1">
-                    <mxGeometry x="390" y="345" width="60" height="30" as="geometry"/>
+                    <mxGeometry x="205" y="475" width="60" height="30" as="geometry"/>
                 </mxCell>
                 <mxCell id="314" value="" style="endArrow=classic;html=1;dashed=1;strokeColor=#FFFFFF;fontColor=#FFFFFF;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="1" source="107" target="295">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
@@ -128,6 +128,12 @@
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="145" y="160" as="sourcePoint"/>
                         <mxPoint x="195" y="210" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="318" value="" style="endArrow=classic;html=1;dashed=1;strokeColor=#FFFFFF;fontColor=#FFFFFF;entryX=0;entryY=0;entryDx=0;entryDy=0;exitX=0.25;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="1" source="299" target="312">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="130" y="290" as="sourcePoint"/>
+                        <mxPoint x="190" y="330" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
             </root>
