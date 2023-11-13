@@ -183,11 +183,10 @@ identical but reassigning the thread ids.
 
 REDUCED THREAD DIVERGENCE IMAGE
 
-```{note}
-For those less proficient in reading Git diffs, the coming code segments show
-changes between versions of a file. Lines highlighted in red are removed or
-changed while lines highlighted green are being introduced.
-```
+> [!NOTE]
+> For those less proficient in reading Git diffs, the coming code segments show
+> changes between versions of a file. Lines highlighted in red are removed or
+> changed while lines highlighted green are being introduced.
 
 ```diff
 // Shared reduction
@@ -245,13 +244,12 @@ threads form continous ranges but their memory accesses too.
 
 BANK CONFLICT FREE THREAD DIVERGENCE IMAGE
 
-```{tip}
-It is easiest to avoid bank conflicts if one can read shared memory in a
-coalesced manner, meaning reads/writes of each lane in a warp evaluate to
-consequtive locations. Additional requirements must be met detailed more
-thoroughly in the linked ISA documents, but having simple read/write patterns
-help reason about bank conflicts.
-```
+> [!NOTE]
+> It is easiest to avoid bank conflicts if one can read shared memory in a
+> coalesced manner, meaning reads/writes of each lane in a warp evaluate to
+> consequtive locations. Additional requirements must be met detailed more
+> thoroughly in the linked ISA documents, but having simple read/write patterns
+> help reason about bank conflicts.
 
 ### 4. Utilize upper half of the block
 
@@ -368,20 +366,20 @@ for (uint32_t curr = input_count; curr > 1;)
 }
 ```
 
-```{note}
-Lanes of a warp on NVIDIA hardware may execute somewhat independently, so long
-as the programmer assists the compiler using dedicated built-in functions. (A
-feature called Independent Thread Scheduling.) The HIP headers do not expose
-the matching warp primitive overloads. Portable applications can still tap into
-this feature with carefully `#ifdef`ed code, but the benefit of doing so in
-this particular case, when the active/inactive threads in a block inherently
-manifest [partitioned](https://en.cppreference.com/w/cpp/algorithm/partition)
-is next to zero. Benefits may be reaped if partitioning is costly, in which
-case the thread scheduler will reorder the threads of a block and schedule the
-active threads together into the same warp. It's a hardware feature assisting
-highly and unpredictably divergent workflow, such as ray-tracing but is
-unnecessary gymnastics in well defined algorithms.
-```
+> [!NOTE]
+> Lanes of a warp on NVIDIA hardware may execute somewhat independently, so
+> long as the programmer assists the compiler using dedicated built-in
+> functions. (A feature called Independent Thread Scheduling.) The HIP headers
+> do not expose the matching warp primitive overloads. Portable applications
+> can still tap into this feature with carefully `#ifdef`ed code, but the
+> benefit of doing so in this particular case, when the active/inactive threads
+> in a block inherently manifest
+> [partitioned](https://en.cppreference.com/w/cpp/algorithm/partition) is next
+> to zero. Benefits may be reaped if partitioning is costly, in which case the
+> thread scheduler will reorder the threads of a block and schedule the active
+> threads together into the same warp. It's a hardware feature assisting highly
+> and unpredictably divergent workflow, such as ray-tracing but is unnecessary
+> gymnastics in well defined algorithms.
 
 ### 6. Unroll all loops
 
@@ -599,20 +597,20 @@ This kernel variant will utilize another utility which is generally applicable:
 `std::array`, as it only allows indexing only via compile-time constants using
 the usual tuple-like `template <size_t I> auto get<I>(...)` interface.
 
-```{tip}
-This is important, because on a GPU there is no stack, but local memory is
-provisioned from the register file and this provisioning happens statically. To
-paraphrase, the address range of a thread's local memory is determined at
-compile time. When an array is defined and used in local storage, the compiler
-can only maintain its storage in the register file as long as all access to the
-array is computable by the compiler at compile-time. It need not strictly be a
-compile-time constant, if through constant folding or some other means the
-compiler can resolve the addresses of the accesses. However, if it cannot, the
-array will be backed by global memory (indicated by allocating a non-zero
-number of spill registers observable using static analysis tools) which is
-multiple orders of magnitude slower. `hip::static_array` via its `hip::get<>`
-interface guarantees that no such spills will occur.
-```
+> [!NOTE]
+> This is important, because on a GPU there is no stack, but local memory is
+> provisioned from the register file and this provisioning happens statically.
+> To paraphrase, the address range of a thread's local memory is determined at
+> compile time. When an array is defined and used in local storage, the
+> compiler can only maintain its storage in the register file as long as all
+> access to the array is computable by the compiler at compile-time. It need
+> not strictly be a compile-time constant, if through constant folding or some
+> other means the compiler can resolve the addresses of the accesses. However,
+> if it cannot, the array will be backed by global memory (indicated by
+> allocating a non-zero number of spill registers observable using static
+> analysis tools) which is multiple orders of magnitude slower.
+> `hip::static_array` via its `hip::get<>` interface guarantees that no such
+> spills will occur.
 
 ```c++
 template<uint32_t BlockSize, uint32_t WarpSize, uint32_t ItemsPerThread>
@@ -688,19 +686,18 @@ See [here](https://godbolt.org/z/b36Eea69q) how loading for AMD (both RDNA and
 CDNA) compiles to `global_load_dwordx4` where `x4` denotes the 4-vector variant
 of the instruction.
 
-```{tip}
-Eagle eyed readers may have noticed that `read_global_safe` used to take an
-`uint32_t` as the index type and now it takes a signed integer. When indexing
-an array with unsigned integrals, the compiler has to handle integer overflows
-as they're defined by the C/C++ standards. It may happen, that some part of the
-vector load indices overflow, thus not resulting in a contiguous read. If you
-change the previously linked code to use an unsigned integral as the thread id,
-the compiler won't emit a vector load. Signed integer overflow is undefined
-behavior, and the optimizer assumes that a program has none in it. To convey
-the absence of overflow to the compiler with unsigned indices, add
-`__builtin_assume(gid + 4 > gid)`, or the more portable
-`[[assume]](gid + 4 > gid)` once `amdclang++` supports it.
-```
+> [!NOTE]
+> Eagle eyed readers may have noticed that `read_global_safe` used to take an
+> `uint32_t` as the index type and now it takes a signed integer. When indexing
+> an array with unsigned integrals, the compiler has to handle integer
+> overflows as they're defined by the C/C++ standards. It may happen, that some
+> part of the vector load indices overflow, thus not resulting in a contiguous
+> read. If you change the previously linked code to use an unsigned integral as
+> the thread id, the compiler won't emit a vector load. Signed integer overflow
+> is undefined behavior, and the optimizer assumes that a program has none in
+> it. To convey the absence of overflow to the compiler with unsigned indices,
+> add `__builtin_assume(gid + 4 > gid)`, or the more portable
+> `[[assume]](gid + 4 > gid)` once `amdclang++` supports it.
 
 To conclude `read_global_safe`'s implementation, it's an IILE (Immediately
 Invoked Lambda Expression), becasue `ItemsPerThread` is an integral value, but
@@ -746,35 +743,32 @@ With this method, one can save 1-2 kernel launches for really large inputs.
 
 ### 11. Global Data Share
 
-```{attention}
-This modification can only be executed on AMD hardware.
-```
+> [!WARNING]
+> This modification can only be executed on AMD hardware.
 
 Perform the first step of the two-pass reduction, but at the end, instead of
 writing to global and reading it back in a subsequent kernel, write the partial
 results to the Global Data Share (aka. GDS). This is an `N+1`th shared memory
 which all Multi Processors can access and is also on-chip memory.
 
-```{tip}
-The order in which blocks are scheduled isn't guaranteed by the API, even
-though all GPUs in existence schedule them the same way, monotonically
-increasing in their block id. Relying on this implicitly, the last block of a
-grid is in the optimal position to observe the side-effects of all other blocks
-(using spinlocks, or anything else) without occupying a Multi Processor for
-longer than necessary.
-```
+> [!NOTE]
+> The order in which blocks are scheduled isn't guaranteed by the API, even
+> though all GPUs in existence schedule them the same way, monotonically
+> increasing in their block id. Relying on this implicitly, the last block of a
+> grid is in the optimal position to observe the side-effects of all other
+> blocks (using spinlocks, or anything else) without occupying a Multi
+> Processor for longer than necessary.
 
 Without launching a second kernel, have the last block collect the results of
 all other blocks from GDS (either implicitly exploiting the sceduling behavior
 or relying on Global Wave Sync, yet another AMD-specific feature) to merge them
 for a final tree-like reduction.
 
-```{important}
-Both GDS and GWS aren't covered by the HIP API but reserved features of the
-runtime. Invoking these functionalities currently requires inline AMDGCN
-assemby. Furthermore because the GDS isn't virtualized by the runtime, imposing
-further restrictions on concurrent scheduling of other kernels.
-```
+> [!IMPORTANT]
+> Both GDS and GWS aren't covered by the HIP API but reserved features of the
+> runtime. Invoking these functionalities currently requires inline AMDGCN
+> assemby. Furthermore because the GDS isn't virtualized by the runtime,
+> imposing further restrictions on concurrent scheduling of other kernels.
 
 ## Conclusion
 
