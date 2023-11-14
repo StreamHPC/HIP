@@ -62,7 +62,7 @@ that partial result to Global in a location unique to the Block, allowing Block
 to make independent progress. Combining these partial results will happen in
 subsequent launches of the very same kernel until a scalar result is reached.
 
-NAIVE REDUCTION IMAGE
+![Diagram demonstrating naive reduction](../data/tutorial/reduction/naive_reduction.svg)
 
 This approach will require temporary storage based on the number of Blocks
 launched, as each will output a scalar partial result. Depending on whether it
@@ -76,9 +76,9 @@ may be destroyed.
 std::size_t factor = block_size; // block_size from hipGetDeviceProperties()
 auto new_size = [factor](const std::size_t actual)
 {
-	// Every pass reduces input length by 'factor'. If actual size is not divisible by factor,
-	// an extra output element is produced using some number of zero_elem inputs.
-	return actual / factor + (actual % factor == 0 ? 0 : 1);
+ // Every pass reduces input length by 'factor'. If actual size is not divisible by factor,
+ // an extra output element is produced using some number of zero_elem inputs.
+ return actual / factor + (actual % factor == 0 ? 0 : 1);
 };
 ```
 
@@ -106,21 +106,21 @@ iteration so the result is in the back-buffer no matter the input size.
 ```c++
 for (uint32_t curr = input_count; curr > 1;)
 {
-	hipLaunchKernelGGL(
-		kernel,
-		dim3(new_size(curr)),
-		dim3(block_size),
-		factor * sizeof(unsigned),
-		hipStreamDefault,
-		front,
-		back,
-		kernel_op,
-		zero_elem,
-		curr);
+ hipLaunchKernelGGL(
+  kernel,
+  dim3(new_size(curr)),
+  dim3(block_size),
+  factor * sizeof(unsigned),
+  hipStreamDefault,
+  front,
+  back,
+  kernel_op,
+  zero_elem,
+  curr);
 
-	curr = new_size(curr);
-	if (curr > 1)
-		std::swap(front, back);
+ curr = new_size(curr);
+ if (curr > 1)
+  std::swap(front, back);
 }
 ```
 
@@ -131,39 +131,39 @@ the kernel itself:
 ```c++
 template<typename T, typename F>
 __global__ void kernel(
-	T* front,
-	T* back,
-	F op,
-	T zero_elem,
-	uint32_t front_size)
+ T* front,
+ T* back,
+ F op,
+ T zero_elem,
+ uint32_t front_size)
 {
-	extern __shared__ T shared[];
+ extern __shared__ T shared[];
 
-	// Overindex-safe read of input
-	auto read_global_safe = [&](const uint32_t i)
-	{
-		return i < front_size ? front[i] : zero_elem;
-	};
+ // Overindex-safe read of input
+ auto read_global_safe = [&](const uint32_t i)
+ {
+  return i < front_size ? front[i] : zero_elem;
+ };
 
-	const uint32_t tid = threadIdx.x,
-	               bid = blockIdx.x,
-	               gid = bid * blockDim.x + tid;
+ const uint32_t tid = threadIdx.x,
+                bid = blockIdx.x,
+                gid = bid * blockDim.x + tid;
 
-	// Read input from front buffer to shared
-	shared[tid] = read_global_safe(gid);
-	__syncthreads();
+ // Read input from front buffer to shared
+ shared[tid] = read_global_safe(gid);
+ __syncthreads();
 
-	// Shared reduction
-	for (uint32_t i = 1; i < blockDim.x; i *= 2)
-	{
-		if (tid % (2 * i) == 0)
-			shared[tid] = op(shared[tid], shared[tid + i]);
-		__syncthreads();
-	}
+ // Shared reduction
+ for (uint32_t i = 1; i < blockDim.x; i *= 2)
+ {
+  if (tid % (2 * i) == 0)
+   shared[tid] = op(shared[tid], shared[tid + i]);
+  __syncthreads();
+ }
 
-	// Write result from shared to back buffer
-	if (tid == 0)
-		back[bid] = shared[0];
+ // Write result from shared to back buffer
+ if (tid == 0)
+  back[bid] = shared[0];
 }
 ```
 
@@ -181,7 +181,7 @@ branch) for longer than necessary.
 One may reduce divergence by keeping dataflow between memory addresses
 identical but reassigning the thread ids.
 
-REDUCED THREAD DIVERGENCE IMAGE
+![Diagram demonstrating reduced divergence reduction](../data/tutorial/reduction/reduced_divergence_reduction.svg)
 
 > [!NOTE]
 > For those less proficient in reading Git diffs, the coming code segments show
@@ -192,11 +192,11 @@ REDUCED THREAD DIVERGENCE IMAGE
 // Shared reduction
 for (uint32_t i = 1; i < blockDim.x; i *= 2)
 {
--	if (tid % (2 * i) == 0)
--		shared[tid] = op(shared[tid], shared[tid + i]);
-+	if (uint32_t j = 2 * i * tid; j < blockDim.x)
-+		shared[j] = op(shared[j], shared[j + i]);
-	__syncthreads();
+- if (tid % (2 * i) == 0)
+-  shared[tid] = op(shared[tid], shared[tid + i]);
++ if (uint32_t j = 2 * i * tid; j < blockDim.x)
++  shared[j] = op(shared[j], shared[j + i]);
+ __syncthreads();
 }
 ```
 
@@ -213,7 +213,7 @@ implemented using the same silicon as the L1 data cache. A truthful mental
 model of shared memory is to think of it as a striped 2-dimensional range of
 memory.
 
-SHARED MEMORY BANKS IMAGE
+![Diagram demonstrating bank conflict free reduction](../data/tutorial/reduction/conflict_free_reduction.svg)
 
 Shared memory bank count, width and depth depend on the architecture at hand.
 A bank conflict occurs when different threads in a warp/wavefront access the
@@ -233,12 +233,12 @@ threads form continous ranges but their memory accesses too.
 // Shared reduction
 -for (uint32_t i = 1; i < blockDim.x; i *= 2)
 -{
--	if (tid % (2 * i) == 0)
+- if (tid % (2 * i) == 0)
 +for (uint32_t i = blockDim.x / 2; i != 0; i /= 2)
 +{
-+	if (tid < i)
-		shared[tid] = op(shared[tid], shared[tid + i]);
-	__syncthreads();
++ if (tid < i)
+  shared[tid] = op(shared[tid], shared[tid + i]);
+ __syncthreads();
 }
 ```
 
@@ -274,8 +274,8 @@ __syncthreads();
 and the host code as such:
 
 ```diff
--	std::size_t factor = block_size;
-+	std::size_t factor = block_size * 2;
+- std::size_t factor = block_size;
++ std::size_t factor = block_size * 2;
 ```
 
 By eliminating half of the threads and giving meaningful work to all the
@@ -310,23 +310,23 @@ code.
 -template<typename T, typename F>
 +template<uint32_t WarpSize, typename T, typename F>
 __global__ void kernel(
-	...
+ ...
 )
 {
-	...
+ ...
 // Shared reduction
 -for (uint32_t i = blockDim.x / 2; i != 0; i /= 2)
 +for (uint32_t i = blockDim.x / 2; i > WarpSize; i /= 2)
 {
-	if (tid < i)
-		shared[tid] = op(shared[tid], shared[tid + i]);
-	__syncthreads();
+ if (tid < i)
+  shared[tid] = op(shared[tid], shared[tid + i]);
+ __syncthreads();
 }
 +// Warp reduction
 +tmp::static_for<WarpSize, tmp::not_equal<0>, tmp::divide<2>>([&]<int I>()
 +{
-+	if (tid < I)
-+		shared[tid] = op(shared[tid], shared[tid + I]);
++ if (tid < I)
++  shared[tid] = op(shared[tid], shared[tid + I]);
 +});
 ```
 
@@ -347,22 +347,22 @@ run-time `warp_size` variable to a camel-case compile-time constant `WarpSize`.
 // Device-side reduction
 for (uint32_t curr = input_count; curr > 1;)
 {
-+	tmp::static_range_switch<std::array{32, 64}>(warp_size, [&]<int WarpSize>() noexcept
-+	{
-		hipLaunchKernelGGL(
--			kernel,
-+			kernel<WarpSize>,
-			dim3(new_size(curr)),
-			dim3(block_size),
-			factor * sizeof(unsigned),
-			hipStreamDefault,
-			front,
-			back,
-			kernel_op,
-			zero_elem,
-			curr);
-+	});
-		...
++ tmp::static_range_switch<std::array{32, 64}>(warp_size, [&]<int WarpSize>() noexcept
++ {
+  hipLaunchKernelGGL(
+-   kernel,
++   kernel<WarpSize>,
+   dim3(new_size(curr)),
+   dim3(block_size),
+   factor * sizeof(unsigned),
+   hipStreamDefault,
+   front,
+   back,
+   kernel_op,
+   zero_elem,
+   curr);
++ });
+  ...
 }
 ```
 
@@ -394,28 +394,28 @@ warps/wavefronts).
 -__global__ void kernel(
 +template<uint32_t BlockSize, uint32_t WarpSize, typename T, typename F>
 +__global__ __launch_bounds__(BlockSize) void kernel(
-	T* front,
-	T* back,
-	F op,
-	T zero_elem,
-	uint32_t front_size)
+ T* front,
+ T* back,
+ F op,
+ T zero_elem,
+ uint32_t front_size)
 {
--	extern __shared__ T shared[];
-+	__shared__ T shared[BlockSize];
+- extern __shared__ T shared[];
++ __shared__ T shared[BlockSize];
 
-	...
+ ...
 
-	// Shared reduction
--	for (uint32_t i = blockDim.x / 2; i > WarpSize; i /= 2)
-+	tmp::static_for<BlockSize / 2, tmp::greater_than<WarpSize>, tmp::divide<2>>([&]<int I>()
-	{
--		if (tid < i)
--			shared[tid] = op(shared[tid], shared[tid + i]);
-+		if (tid < I)
-+			shared[tid] = op(shared[tid], shared[tid + I]);
-		__syncthreads();
-	}
-+	);
+ // Shared reduction
+- for (uint32_t i = blockDim.x / 2; i > WarpSize; i /= 2)
++ tmp::static_for<BlockSize / 2, tmp::greater_than<WarpSize>, tmp::divide<2>>([&]<int I>()
+ {
+-  if (tid < i)
+-   shared[tid] = op(shared[tid], shared[tid + i]);
++  if (tid < I)
++   shared[tid] = op(shared[tid], shared[tid + I]);
+  __syncthreads();
+ }
++ );
 ```
 
 There are two notable changes beyond introducing yet another template argument
@@ -445,24 +445,24 @@ structured communication schemes.
 // Warp reduction
 -tmp::static_for<WarpSize, tmp::not_equal<0>, tmp::divide<2>>([&]<int I>()
 -{
--	if (tid < I)
--		shared[tid] = op(shared[tid], shared[tid + I]);
+- if (tid < I)
+-  shared[tid] = op(shared[tid], shared[tid + I]);
 -});
 -
 -// Write result from shared to back buffer
 -if (tid == 0)
--	back[bid] = shared[0];
+- back[bid] = shared[0];
 +if (tid < WarpSize)
 +{
-+	T res = op(shared[tid], shared[tid + WarpSize]);
-+	tmp::static_for<WarpSize / 2, tmp::not_equal<0>, tmp::divide<2>>([&]<int Delta>()
-+	{
-+		res = op(res, __shfl_down(res, Delta));
-+	});
++ T res = op(shared[tid], shared[tid + WarpSize]);
++ tmp::static_for<WarpSize / 2, tmp::not_equal<0>, tmp::divide<2>>([&]<int Delta>()
++ {
++  res = op(res, __shfl_down(res, Delta));
++ });
 +
-+	// Write result from shared to back buffer
-+	if (tid == 0)
-+		back[bid] = res;
++ // Write result from shared to back buffer
++ if (tid == 0)
++  back[bid] = res;
 +}
 ```
 
@@ -487,13 +487,13 @@ a diff but afresh.
 ```c++
 template<uint32_t BlockSize, uint32_t WarpSize, typename T, typename F>
 __global__ __launch_bounds__(BlockSize) void kernel(
-	T* front,
-	T* back,
-	F op,
-	T zero_elem,
-	uint32_t front_size)
+ T* front,
+ T* back,
+ F op,
+ T zero_elem,
+ uint32_t front_size)
 {
-	...
+ ...
 }
 ```
 
@@ -506,9 +506,9 @@ static constexpr uint32_t WarpCount = BlockSize / WarpSize;
 __shared__ T shared[WarpCount];
 
 auto read_global_safe =
-	[&](const uint32_t i) { return i < front_size ? front[i] : zero_elem; };
+ [&](const uint32_t i) { return i < front_size ? front[i] : zero_elem; };
 auto read_shared_safe =
-	[&](const uint32_t i) { return i < WarpCount ? shared[i] : zero_elem; };
+ [&](const uint32_t i) { return i < WarpCount ? shared[i] : zero_elem; };
 
 const uint32_t tid = threadIdx.x,
                bid = blockIdx.x,
@@ -530,28 +530,28 @@ reading `zero_elem`ents. Reading from global remains unchanged.
 ```c++
 // Perform warp reductions and communicate results via shared
 tmp::static_for<
-	WarpCount,
-	tmp::not_equal<0>,
-	tmp::select<
-		tmp::not_equal<1>,
-		tmp::divide_ceil<WarpSize>,
-		tmp::constant<0>>>([&]<uint32_t ActiveWarps>()
+ WarpCount,
+ tmp::not_equal<0>,
+ tmp::select<
+  tmp::not_equal<1>,
+  tmp::divide_ceil<WarpSize>,
+  tmp::constant<0>>>([&]<uint32_t ActiveWarps>()
 {
-	if(wid < ActiveWarps)
-	{
-		// Warp reduction
-		tmp::static_for<WarpSize / 2, tmp::not_equal<0>, tmp::divide<2>>([&]<int Delta>()
-		{
-			res = op(res, __shfl_down(res, Delta)); });
+ if(wid < ActiveWarps)
+ {
+  // Warp reduction
+  tmp::static_for<WarpSize / 2, tmp::not_equal<0>, tmp::divide<2>>([&]<int Delta>()
+  {
+   res = op(res, __shfl_down(res, Delta)); });
 
-			// Write warp result from local to shared
-			if(lid == 0)
-				shared[wid] = res;
-	}
-	__syncthreads();
+   // Write warp result from local to shared
+   if(lid == 0)
+    shared[wid] = res;
+ }
+ __syncthreads();
 
-	// Read warp result from shared to local
-	res = read_shared_safe(tid);
+ // Read warp result from shared to local
+ res = read_shared_safe(tid);
 });
 
 // Write result from local to back buffer
@@ -636,17 +636,17 @@ The change to reading is going to happen inside `read_global_safe`:
 ```c++
 auto read_global_safe = [&](const int32_t i)
 {
-	return [&]<int32_t... I>(std::integer_sequence<int32_t, I...>)
-	{
-		if(i + ItemsPerThread < front_size)
-			return hip::static_array<T, ItemsPerThread>{
-				front[i + I]...
-			};
-		else
-			return hip::static_array<T, ItemsPerThread>{
-				(i + I < front_size ? front[i + I] : zero_elem)...
-			};
-	}(std::make_integer_sequence<int32_t, ItemsPerThread>());
+ return [&]<int32_t... I>(std::integer_sequence<int32_t, I...>)
+ {
+  if(i + ItemsPerThread < front_size)
+   return hip::static_array<T, ItemsPerThread>{
+    front[i + I]...
+   };
+  else
+   return hip::static_array<T, ItemsPerThread>{
+    (i + I < front_size ? front[i + I] : zero_elem)...
+   };
+ }(std::make_integer_sequence<int32_t, ItemsPerThread>());
 };
 ```
 
@@ -656,10 +656,10 @@ other, morally equivalent to:
 
 ```c++
 T arr[4] = {
-	front[gid + 0],
-	front[gid + 1],
-	front[gid + 2],
-	front[gid + 3]
+ front[gid + 0],
+ front[gid + 1],
+ front[gid + 2],
+ front[gid + 3]
 }
 ```
 
@@ -670,10 +670,10 @@ overindex the input, the read turns into:
 
 ```c++
 T arr[4] = {
-	gid + I < front_size ? front[i + 0] : zero_elem,
-	gid + I < front_size ? front[i + 1] : zero_elem,
-	gid + I < front_size ? front[i + 2] : zero_elem,
-	gid + I < front_size ? front[i + 3] : zero_elem
+ gid + I < front_size ? front[i + 0] : zero_elem,
+ gid + I < front_size ? front[i + 1] : zero_elem,
+ gid + I < front_size ? front[i + 2] : zero_elem,
+ gid + I < front_size ? front[i + 3] : zero_elem
 }
 ```
 
@@ -715,16 +715,16 @@ cheap, no shuffling is even cheaper.
 ```c++
 T res = [&]()
 {
-	// Read input from front buffer to local
-	hip::static_array<T, ItemsPerThread> arr = read_global_safe(gid);
+ // Read input from front buffer to local
+ hip::static_array<T, ItemsPerThread> arr = read_global_safe(gid);
 
-	// Reduce ItemsPerThread to scalar
-	tmp::static_for<1, tmp::less_than<ItemsPerThread>, tmp::increment<1>>([&]<int I>()
-	{
-		get<0>(arr) = op(get<0>(arr), get<I>(arr));
-	});
+ // Reduce ItemsPerThread to scalar
+ tmp::static_for<1, tmp::less_than<ItemsPerThread>, tmp::increment<1>>([&]<int I>()
+ {
+  get<0>(arr) = op(get<0>(arr), get<I>(arr));
+ });
 
-	return get<0>(arr);
+ return get<0>(arr);
 }();
 ```
 
