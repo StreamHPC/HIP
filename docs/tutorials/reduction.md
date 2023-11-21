@@ -271,12 +271,7 @@ const uint32_t tid = threadIdx.x,
 __syncthreads();
 ```
 
-and the host code as such:
-
-```diff
--	std::size_t factor = block_size;
-+	std::size_t factor = block_size * 2;
-```
+and the calculation of `factor` on the host as well.
 
 By eliminating half of the threads and giving meaningful work to all the
 threads by unconditionally performing a binary `op`, we don't waste half of our
@@ -298,13 +293,192 @@ The `tmp` namespace used beyond this point in the chapter holds a handful of
 template meta-programmed utilities to facilitate writing flexible _and_ optimal
 code.
 
-- `tmp::static_for` is a for loop where the running index is a compile-time
-  constant and is eligible for use in compile-time evaluated contexts, not just
-  constant folding within the compiler.
-- `tmp::static_range_for` is the range-based for loop equivalent.
-- `tmp::static_range_switch` takes run-time value and run-time dispatches to a
-  range set of tabulated functions where said value is a compile-time constant
-  and is eligible for use in compile-time evaluated contexts.
+<details>
+
+<summary>
+<code>tmp::static_for</code> is a variation of the language <code>for</code>
+loop where the running index is a compile-time constant and is eligible for use
+in compile-time evaluated contexts not just constant folding within the
+optimizer.
+</summary>
+
+Consider the following code:
+
+```c++
+constexpr int size = 4;
+for (int i = 0 ; i < size ; ++i)
+{
+	printf("%d", i);
+}
+```
+
+This compiles to the following binaries:
+
+<table>
+<tr>
+<td><b>LLVM</b></td>
+<td><b>GCC</b></td>
+<td><b>MSVC</b></td>
+</tr>
+
+<tr>
+<td>
+
+```asm
+main:
+    push    rbx
+    lea     rbx, [rip + .L.str]
+    mov     rdi, rbx
+    xor     esi, esi
+    xor     eax, eax
+    call    printf@PLT
+    mov     rdi, rbx
+    mov     esi, 1
+    xor     eax, eax
+    call    printf@PLT
+    mov     rdi, rbx
+    mov     esi, 2
+    xor     eax, eax
+    call    printf@PLT
+    mov     rdi, rbx
+    mov     esi, 3
+    xor     eax, eax
+    call    printf@PLT
+    xor     eax, eax
+    pop     rbx
+    ret
+.L.str:
+    .asciz  "%d"
+```
+
+</td>
+<td>
+
+```asm
+.LC0:
+    .string "%d"
+main:
+    push    rbx
+    xor     ebx, ebx
+.L2:
+    mov     esi, ebx
+    mov     edi, OFFSET FLAT:.LC0
+    xor     eax, eax
+    add     ebx, 1
+    call    printf
+    cmp     ebx, 4
+    jne     .L2
+    xor     eax, eax
+    pop     rbx
+    ret
+```
+
+</td>
+<td>
+
+```asm
+main    PROC
+$LN12:
+    push    rbx
+    sub     rsp, 32
+    xor     ebx, ebx
+    npad    8
+$LL4@main:
+    mov     edx, ebx
+    lea     rcx, OFFSET FLAT:`string'
+    call    printf
+    inc     ebx
+    cmp     ebx, 4
+    jl      SHORT $LL4@main
+    xor     eax, eax
+    add     rsp, 32
+    pop     rbx
+    ret     0
+main    ENDP
+```
+
+</td>
+</tr>
+
+</table>
+
+LLVM unrolls the the loop and compiles to a flat series of `printf` invocations
+while GCC and MSVC both agree to keep the loop intact, visible from the compare
+(`cmp`) and the jump (`jne`, `jl`) instructions. LLVM codegen is identical to
+us having written the unrolled loop manually:
+
+```c++
+printf("%d", 0);
+printf("%d", 1);
+printf("%d", 2);
+printf("%d", 3);
+```
+
+While there are various non-standard pragmas availalbe to hint or force the
+compiler to unroll the loop, we instead use template meta-programming to force
+feed the compiler the unrolled loop.
+
+```c++
+constexpr int size = 4;
+
+// Maybe unrolled loop
+for (int i = 0 ; i < size ; ++i)
+{
+	printf("%d", i);
+}
+
+// Force unrolled loop
+using namespace tmp;
+static_for<0, less_than<size>, increment<1>>([]<int i>()
+{
+    printf("%d", i);
+});
+```
+
+The most notable difference in structure is that in the language `for` loop we
+start by giving the loop variable a name, while in our `static_for` utility we
+give it a name at the end. An important bonus is that in the body of the loop
+we can use the running index `i` in contexts requiring constant expressions:
+as template arguments or inside `if constexpr`.
+
+</details>
+
+<details>
+
+<summary>
+<code>tmp::static_switch</code> takes run-time value and run-time dispatches to
+a range set of tabulated functions where said value is a compile-time constant
+and is eligible for use in compile-time evaluated contexts.
+</summary>
+
+Consider the following code:
+
+```c++
+int warp_size = device_props.warpSize;
+switch (warp_size)
+{
+case 32:
+	hipLaunchKernelGGL(kernel<32>, ...);
+	break;
+case 64:
+	hipLaunchKernelGGL(kernel<64>, ...);
+	break;
+}
+```
+
+This all works fine as long as one doesn't commit copy-paste errors, as we had
+to repeat the possible values of `warp_size` our code is prepared to handle.
+This is what `tmp::static_switch` helps us with. The above is morally
+equiavalent to:
+
+```c++
+tmp::static_switch<std::array{32, 64}>(warp_size, [&]<int WarpSize>()
+{
+	hipLaunchKernelGGL(kernel<WarpSize>, ...);
+});
+```
+
+</details>
 
 ```diff
 -template<typename T, typename F>
@@ -327,6 +501,9 @@ __global__ void kernel(
 +{
 +	if (tid < I)
 +		shared[tid] = op(shared[tid], shared[tid + I]);
++#ifdef __HIP_PLATFORM_NVIDIA__
++	__syncwarp(0xffffffff >> (WarpSize - I));
++#endif
 +});
 ```
 
@@ -335,12 +512,11 @@ RDNA AMD GPUs) as well as of 64 (CNDA AMD GPUs), portable HIP code must handle
 both. That is why instead of assuming a warp size of 32 we make that a template
 argument of the kernel, allowing us to unroll the final loop using
 `tmp::static_for` in a parametric way but still having the code read much like
-an ordinary loop, perhaps with the sole major difference of naming the loop
-"variable" last via the template lambda.
+an ordinary loop.
 
-Promoting the warp/wavefront size size to being a compile-time constant means
-we have to do the same promotion on the host-side as well. We'll sandwich our
-kernel launch with `tmp::static_range_switch`, promoting the snake-case
+Promoting the warp/wavefront size to being a compile-time constant means we
+have to do the same promotion on the host-side as well. We'll sandwich our
+kernel launch with `tmp::static_switch`, promoting the snake-case
 run-time `warp_size` variable to a camel-case compile-time constant `WarpSize`.
 
 ```diff
@@ -362,24 +538,24 @@ for (uint32_t curr = input_count; curr > 1;)
 			zero_elem,
 			curr);
 +	});
-		...
+	...
 }
 ```
 
 > [!NOTE]
-> Lanes of a warp on NVIDIA hardware may execute somewhat independently, so
-> long as the programmer assists the compiler using dedicated built-in
-> functions. (A feature called Independent Thread Scheduling.) The HIP headers
-> do not expose the matching warp primitive overloads. Portable applications
-> can still tap into this feature with carefully `#ifdef`ed code, but the
-> benefit of doing so in this particular case, when the active/inactive threads
-> in a block inherently manifest
-> [partitioned](https://en.cppreference.com/w/cpp/algorithm/partition) is next
-> to zero. Benefits may be reaped if partitioning is costly, in which case the
-> thread scheduler will reorder the threads of a block and schedule the active
-> threads together into the same warp. It's a hardware feature assisting highly
-> and unpredictably divergent workflow, such as ray-tracing but is unnecessary
-> gymnastics in well defined algorithms.
+> Neither RDNA nor CDNA based AMD hardware provide independent progress
+> guarantees to lanes of the same wavefront. Lanes of a warp when targeting
+> NVIDIA hardware may execute somewhat independently, so long as the programmer
+> assists the compiler using dedicated built-in functions. (A feature called
+> Independent Thread Scheduling.) The HIP headers do not expose the necessary
+> warp primitives and their overloads.
+>
+> Portable applications can still tap into this feature with carefully
+> `#ifdef`ed code, but in this particular optimiazion level it's a requirement.
+> The code implicitly relies on the lockstep behavior of a wavefront, but warps
+> do not share this property. We have to synchronize all the active lanes of a
+> warp to avoid a data race by some lanes progressing faster than others in the
+> same warp.
 
 ### 6. Unroll all loops
 
@@ -441,34 +617,25 @@ The family of functions that allow us to do this are the shuffle functions.
 We'll be using `__shfl_down()`, one of the most restrictive but also most
 structured communication schemes.
 
-```diff
+```c++
 // Warp reduction
--tmp::static_for<WarpSize, tmp::not_equal<0>, tmp::divide<2>>([&]<int I>()
--{
--	if (tid < I)
--		shared[tid] = op(shared[tid], shared[tid + I]);
--});
--
--// Write result from shared to back buffer
--if (tid == 0)
--	back[bid] = shared[0];
-+if (tid < WarpSize)
-+{
-+	T res = op(shared[tid], shared[tid + WarpSize]);
-+	tmp::static_for<WarpSize / 2, tmp::not_equal<0>, tmp::divide<2>>([&]<int Delta>()
-+	{
-+		res = op(res, __shfl_down(res, Delta));
-+	});
-+
-+	// Write result from shared to back buffer
-+	if (tid == 0)
-+		back[bid] = res;
-+}
+if (tid < WarpSize)
+{
+	T res = op(shared[tid], shared[tid + WarpSize]);
+	tmp::static_for<WarpSize / 2, tmp::not_equal<0>, tmp::divide<2>>([&]<int Delta>()
+	{
+		res = op(res, __shfl_down(res, Delta));
+	});
+
+	// Write result from shared to back buffer
+	if (tid == 0)
+		back[bid] = res;
+}
 ```
 
 Moving to using warp-collective functions for communication means that control
 flow has to be uniform across warps, much like the name warp-collective
-implies. Therefore we externelized the thread id check outside the loop. (Write
+implies. Therefore we externalized the thread id check outside the loop. (Write
 out of the result moved inside due to variable scoping.)
 
 ### 8. Prefer warp communication over shared
@@ -529,6 +696,11 @@ reading `zero_elem`ents. Reading from global remains unchanged.
 
 ```c++
 // Perform warp reductions and communicate results via shared
+// for (uint32_t ActiveWarps = WarpCount;
+//      ActiveWarps != 0;
+//      ActiveWarps = ActiveWarps != 1 ?
+//          divide_ceil(ActiveWarps, WarpSize) :
+//          ActiveWarps = 0)
 tmp::static_for<
 	WarpCount,
 	tmp::not_equal<0>,
@@ -594,8 +766,8 @@ unrolling.
 
 This kernel variant will utilize another utility which is generally applicable:
 `hip::static_array` is a more restrictive wrapper over the built-in array than
-`std::array`, as it only allows indexing only via compile-time constants using
-the usual tuple-like `template <size_t I> auto get<I>(...)` interface.
+`std::array`, as it only allows indexing only compile-time constants using the
+usual tuple-like `template <size_t I> auto get<I>(...)` interface.
 
 > [!NOTE]
 > This is important, because on a GPU there is no stack, but local memory is
@@ -634,7 +806,7 @@ is going to be split now to a reading and a processing step.
 The change to reading is going to happen inside `read_global_safe`:
 
 ```c++
-auto read_global_safe = [&](const int32_t i)
+auto read_global_safe = [&](const int32_t i) -> hip::static_array<T, ItemsPerThread>
 {
 	return [&]<int32_t... I>(std::integer_sequence<int32_t, I...>)
 	{
@@ -670,10 +842,10 @@ overindex the input, the read turns into:
 
 ```c++
 T arr[4] = {
-	gid + I < front_size ? front[i + 0] : zero_elem,
-	gid + I < front_size ? front[i + 1] : zero_elem,
-	gid + I < front_size ? front[i + 2] : zero_elem,
-	gid + I < front_size ? front[i + 3] : zero_elem
+	i + 0 < front_size ? front[i + 0] : zero_elem,
+	i + 1 < front_size ? front[i + 1] : zero_elem,
+	i + 2 < front_size ? front[i + 2] : zero_elem,
+	i + 3 < front_size ? front[i + 3] : zero_elem
 }
 ```
 
